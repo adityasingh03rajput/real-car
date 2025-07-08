@@ -1,129 +1,42 @@
 const WebSocket = require('ws');
-const http = require('http');
-const PORT = process.env.PORT || 8080;
 
-const server = http.createServer();
-const wss = new WebSocket.Server({ server });
+const wss = new WebSocket.Server({ host: '192.168.102.31', port: 8080 });
+let laptopSocket = null;
+let mobileSocket = null;
 
-// Track game sessions
-const sessions = new Map();
+console.log('🟢 Server started at ws://192.168.102.31:8080');
 
-wss.on('connection', (ws) => {
-  console.log('New client connected');
+wss.on('connection', function connection(ws, req) {
+  const ip = req.socket.remoteAddress;
+  console.log(`📡 New connection from ${ip}`);
 
-  ws.on('message', (message) => {
+  ws.on('message', function incoming(message) {
     try {
       const data = JSON.parse(message);
-      
-      // Handle session registration
-      if (data.type === 'register') {
-        const { code, role } = data;
-        
-        // Create new session if doesn't exist
-        if (!sessions.has(code)) {
-          sessions.set(code, { game: null, remote: null });
-          console.log(`New session created with code ${code}`);
-        }
-        
-        const session = sessions.get(code);
-        
-        // Register client in appropriate role
-        if (role === 'game' && !session.game) {
-          session.game = ws;
-          console.log(`Game registered for code ${code}`);
-          ws.send(JSON.stringify({ type: 'status', status: 'waiting' }));
-          
-          // If remote is already connected, notify both
-          if (session.remote) {
-            session.game.send(JSON.stringify({ 
-              type: 'status', 
-              status: 'connected',
-              peer: 'remote'
-            }));
-            session.remote.send(JSON.stringify({ 
-              type: 'status', 
-              status: 'connected',
-              peer: 'game'
-            }));
-          }
-        } 
-        else if (role === 'remote' && !session.remote) {
-          session.remote = ws;
-          console.log(`Remote registered for code ${code}`);
-          ws.send(JSON.stringify({ type: 'status', status: 'waiting' }));
-          
-          // If game is already connected, notify both
-          if (session.game) {
-            session.game.send(JSON.stringify({ 
-              type: 'status', 
-              status: 'connected',
-              peer: 'remote'
-            }));
-            session.remote.send(JSON.stringify({ 
-              type: 'status', 
-              status: 'connected',
-              peer: 'game'
-            }));
-          }
-        }
-        
-        return;
+
+      if (data.role === 'laptop') {
+        laptopSocket = ws;
+        console.log(`🖥️ Laptop connected from ${ip}`);
       }
-      
-      // Forward messages to the paired client
-      const session = [...sessions.entries()]
-        .find(([_, s]) => s.game === ws || s.remote === ws);
-      
-      if (session) {
-        const [code, { game, remote }] = session;
-        if (ws === game && remote) {
-          remote.send(message);
-        } 
-        else if (ws === remote && game) {
-          game.send(message);
+
+      if (data.role === 'mobile') {
+        mobileSocket = ws;
+        console.log(`📱 Mobile connected from ${ip}`);
+      }
+
+      // Log and forward direction
+      if (data.role === 'mobile' && data.angle !== undefined) {
+        console.log(`➡️ Input from Mobile: angle=${data.angle}, power=${data.power}`);
+        if (laptopSocket && laptopSocket.readyState === WebSocket.OPEN) {
+          laptopSocket.send(JSON.stringify({ angle: data.angle, power: data.power }));
         }
       }
-      
-    } catch (e) {
-      console.error('Message error:', e);
+    } catch (err) {
+      console.error('❌ Message Error:', err.message);
     }
   });
 
   ws.on('close', () => {
-    console.log('Client disconnected');
-    
-    // Clean up disconnected clients
-    for (const [code, session] of sessions.entries()) {
-      if (session.game === ws) {
-        if (session.remote) {
-          session.remote.send(JSON.stringify({ 
-            type: 'status', 
-            status: 'disconnected'
-          }));
-        }
-        session.game = null;
-        console.log(`Game disconnected from session ${code}`);
-      }
-      else if (session.remote === ws) {
-        if (session.game) {
-          session.game.send(JSON.stringify({ 
-            type: 'status', 
-            status: 'disconnected'
-          }));
-        }
-        session.remote = null;
-        console.log(`Remote disconnected from session ${code}`);
-      }
-      
-      // Remove empty sessions
-      if (!session.game && !session.remote) {
-        sessions.delete(code);
-        console.log(`Session ${code} removed`);
-      }
-    }
+    console.log(`❌ Disconnected: ${ip}`);
   });
-});
-
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
 });
