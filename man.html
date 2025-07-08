@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Laptop Man Control</title>
+  <style>
+    #ground {
+      width: 100vw;
+      height: 90vh;
+      background: #f0f0f0;
+      position: relative;
+      overflow: hidden;
+    }
+    #man {
+      width: 50px;
+      height: 100px;
+      background: red;
+      position: absolute;
+      left: 200px;
+      top: 200px;
+      border-radius: 10px;
+    }
+  </style>
+</head>
+<body>
+  <h2>Controlled Man (Laptop)</h2>
+  <div id="ground">
+    <div id="man"></div>
+  </div>
+
+  <script>
+    const socket = new WebSocket('ws://192.168.102.31:8080');
+    const man = document.getElementById('man');
+    let x = 200, y = 200;
+    let dx = 0, dy = 0;
+
+    socket.onopen = () => {
+      socket.send(JSON.stringify({ role: 'laptop' }));
+    };
+
+    socket.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      if (data.angle !== undefined && data.power !== undefined) {
+        const rad = data.angle * Math.PI / 180;
+        dx = Math.cos(rad) * data.power * 5;
+        dy = Math.sin(rad) * data.power * 5;
+      }
+    };
+
+    function move() {
+      x += dx;
+      y += dy;
+
+      // Keep inside bounds
+      x = Math.max(0, Math.min(window.innerWidth - 50, x));
+      y = Math.max(0, Math.min(window.innerHeight - 100, y));
+
+      man.style.left = x + 'px';
+      man.style.top = y + 'px';
+
+      requestAnimationFrame(move);
+    }
+
+    move();
+  </script>
+</body>
+</html>
