@@ -22,6 +22,7 @@ wss.on('connection', (ws) => {
         // Create new session if doesn't exist
         if (!sessions.has(code)) {
           sessions.set(code, { game: null, remote: null });
+          console.log(`New session created with code ${code}`);
         }
         
         const session = sessions.get(code);
@@ -31,26 +32,39 @@ wss.on('connection', (ws) => {
           session.game = ws;
           console.log(`Game registered for code ${code}`);
           ws.send(JSON.stringify({ type: 'status', status: 'waiting' }));
+          
+          // If remote is already connected, notify both
+          if (session.remote) {
+            session.game.send(JSON.stringify({ 
+              type: 'status', 
+              status: 'connected',
+              peer: 'remote'
+            }));
+            session.remote.send(JSON.stringify({ 
+              type: 'status', 
+              status: 'connected',
+              peer: 'game'
+            }));
+          }
         } 
         else if (role === 'remote' && !session.remote) {
           session.remote = ws;
           console.log(`Remote registered for code ${code}`);
           ws.send(JSON.stringify({ type: 'status', status: 'waiting' }));
-        }
-        
-        // When both clients are connected
-        if (session.game && session.remote) {
-          session.game.send(JSON.stringify({ 
-            type: 'status', 
-            status: 'connected',
-            peer: 'remote'
-          }));
-          session.remote.send(JSON.stringify({ 
-            type: 'status', 
-            status: 'connected',
-            peer: 'game'
-          }));
-          console.log(`Session ${code} connected`);
+          
+          // If game is already connected, notify both
+          if (session.game) {
+            session.game.send(JSON.stringify({ 
+              type: 'status', 
+              status: 'connected',
+              peer: 'remote'
+            }));
+            session.remote.send(JSON.stringify({ 
+              type: 'status', 
+              status: 'connected',
+              peer: 'game'
+            }));
+          }
         }
         
         return;
@@ -104,11 +118,12 @@ wss.on('connection', (ws) => {
       // Remove empty sessions
       if (!session.game && !session.remote) {
         sessions.delete(code);
+        console.log(`Session ${code} removed`);
       }
     }
   });
 });
 
 server.listen(PORT, () => {
-  console.log(`Session server running on port ${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });
