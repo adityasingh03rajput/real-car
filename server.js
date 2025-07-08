@@ -1,7 +1,12 @@
 const WebSocket = require('ws');
-const wss = new WebSocket.Server({ port: 8080 });
+const PORT = process.env.PORT || 8080;
 
-console.log('WebSocket server running on ws://localhost:8080');
+const server = require('http').createServer();
+const wss = new WebSocket.Server({ server });
+
+server.listen(PORT, () => {
+  console.log(`WebSocket server running on port ${PORT}`);
+});
 
 wss.on('connection', (ws) => {
     console.log('New client connected');
@@ -22,5 +27,6 @@ wss.on('connection', (ws) => {
 process.on('SIGINT', () => {
     console.log('Shutting down server...');
     wss.close();
+    server.close();
     process.exit();
 });
