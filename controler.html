@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<head>
+  <meta name="viewport" content="width=device-width,user-scalable=no"/>
+  <style>
+    body { margin: 0; font-family: Arial, sans-serif; background: #181818; color: white; height: 100vh; overflow: hidden; }
+    .joystick { position: relative; width: 130px; height: 130px; background: rgba(255,255,255,0.12); border-radius: 50%; border: 3px solid #fff3; margin: 0; box-shadow: 0 4px 16px #0008; }
+    .knob { position: absolute; width: 48px; height: 48px; background: linear-gradient(145deg,#fff,#ccc); border-radius: 50%; left: 41px; top: 41px; touch-action: none; box-shadow: 0 2px 8px #0006; }
+    .label { margin-bottom: 18px; font-weight: bold; font-size: 22px; text-shadow: 1px 1px 6px #000; }
+    #status { margin: 10px; color: #ffe066; font-size: 1.2em; text-shadow: 1px 1px 6px #000; }
+    #playerSelect { margin: 10px; padding: 12px 18px; background: #333; color: #ffe066; border: none; border-radius: 12px; font-size: 1.2em; box-shadow: 0 2px 8px #0006; }
+    .animated-btn { width: 100px; height: 100px; border-radius: 50%; border: none; font-size: 1.5em; font-weight: bold; margin: 0; box-shadow: 0 0 20px #0008; display: flex; align-items: center; justify-content: center; transition: background 0.2s, box-shadow 0.2s, transform 0.1s; }
+    .fire-btn { background: linear-gradient(145deg,#ff3333 60%,#fff 100%); color: white; animation: pulse-red 1.2s infinite alternate; }
+    .dynamite-btn { background: linear-gradient(145deg,#ffe066 60%,#fff 100%); color: #222; animation: pulse-yellow 1.2s infinite alternate; }
+    .fire-btn:active { background: #c00; transform: scale(0.95); }
+    .dynamite-btn:active { background: #f80; transform: scale(0.95); }
+    .toggle-btn { width: 100px; height: 48px; border-radius: 24px; background: #222; color: #ffe066; font-size: 1.1em; margin-bottom: 12px; border: 2px solid #ffe066; box-shadow: 0 2px 8px #0006; transition: background 0.2s, color 0.2s; }
+    .toggle-btn.off { background: #444; color: #bbb; border-color: #bbb; }
+    @keyframes pulse-red { 0% { box-shadow: 0 0 20px #ff3333; } 100% { box-shadow: 0 0 40px #ff3333, 0 0 80px #ff3333; } }
+    @keyframes pulse-yellow { 0% { box-shadow: 0 0 20px #ffe066; } 100% { box-shadow: 0 0 40px #ffe066, 0 0 80px #ffe066; } }
+  </style>
+</head>
+<body>
+  <select id="playerSelect">
+    <option value="red">Red Player</option>
+    <option value="blue">Blue Player</option>
+  </select>
+  <div id="status">Connecting...</div>
+  <div id="controls" style="display:flex;flex-direction:row;align-items:center;justify-content:space-between;width:100vw;height:100vh;box-sizing:border-box;">
+    <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;">
+      <div class="label" style="font-size:2em;">Move</div>
+      <div id="moveJoy" class="joystick"><div class="knob"></div></div>
+    </div>
+    <div style="flex:0 0 220px;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:32px;">
+      <div style="display:flex;flex-direction:row;gap:24px;">
+        <button id="shootBtn" class="animated-btn fire-btn">FIRE</button>
+        <button id="dynamiteBtn" class="animated-btn dynamite-btn">BOOM</button>
+      </div>
+      <button id="dynamiteToggle" class="toggle-btn">DYNAMITE ON</button>
+    </div>
+    <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;">
+      <div class="label" style="font-size:2em;">Aim</div>
+      <div id="aimJoy" class="joystick"><div class="knob"></div></div>
+    </div>
+  </div>
+
+  <script>
+    const statusEl = document.getElementById('status');
+    let sock;
+    let connected = false;
+    let currentPlayerId = document.getElementById('playerSelect').value;
+    let superReady = { red: true, blue: true };
+    let superLoading = false;
+    let superLoadTimeout = null;
+    let superLoadStart = 0;
+    
+    function initWebSocket() {
+      statusEl.textContent = "Connecting...";
+      
+      const protocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+      sock = new WebSocket(protocol + '192.168.102.31:8080');
+      
+      sock.onopen = () => {
+        connected = true;
+        statusEl.textContent = "Connected as " + currentPlayerId;
+        sock.send(JSON.stringify({
+          role: 'mobile',
+          playerId: currentPlayerId
+        }));
+      };
+      
+      sock.onmessage = (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          if (data.type === 'player_assigned') {
+            currentPlayerId = data.playerId;
+            document.getElementById('playerSelect').value = currentPlayerId;
+            statusEl.textContent = "Connected as " + currentPlayerId;
+          }
+        } catch (err) {
+          console.error('Error:', err);
+        }
+      };
+      
+      sock.onerror = (error) => {
+        connected = false;
+        statusEl.textContent = "Connection error";
+        setTimeout(initWebSocket, 3000);
+      };
+      
+      sock.onclose = () => {
+        connected = false;
+        statusEl.textContent = "Disconnected. Reconnecting...";
+        setTimeout(initWebSocket, 3000);
+      };
+    }
+    
+    function setupJoystick(stick, cmdPrefix) {
+      const knob = stick.querySelector('.knob');
+      let active = false;
+      let touchId = null;
+      const center = { x: 60, y: 60 };
+      const maxDist = 50;
+      
+      function moveKnob(x, y) {
+        const dx = x - center.x;
+        const dy = y - center.y;
+        const dist = Math.min(Math.hypot(dx, dy), maxDist);
+        const angle = Math.atan2(dy, dx);
+        
+        knob.style.transform = `translate(${Math.cos(angle) * dist}px, ${Math.sin(angle) * dist}px)`;
+        
+        if (connected) {
+          sock.send(JSON.stringify({
+            playerId: currentPlayerId,
+            cmd: cmdPrefix,
+            angle: (angle * 180/Math.PI + 360) % 360,
+            power: dist/maxDist
+          }));
+        }
+      }
+      
+      stick.addEventListener('touchstart', (e) => {
+        if (active) return;
+        const touch = e.touches[0];
+        const rect = stick.getBoundingClientRect();
+        center.x = rect.width/2;
+        center.y = rect.height/2;
+        active = true;
+        touchId = touch.identifier;
+        moveKnob(touch.clientX - rect.left, touch.clientY - rect.top);
+      }, {passive: false});
+      
+      stick.addEventListener('touchmove', (e) => {
+        if (!active) return;
+        for (let touch of e.touches) {
+          if (touch.identifier === touchId) {
+            const rect = stick.getBoundingClientRect();
+            moveKnob(touch.clientX - rect.left, touch.clientY - rect.top);
+            break;
+          }
+        }
+      }, {passive: false});
+      
+      stick.addEventListener('touchend', (e) => {
+        if (!active) return;
+        for (let touch of e.changedTouches) {
+          if (touch.identifier === touchId) {
+            active = false;
+            knob.style.transform = 'translate(0, 0)';
+            if (connected) {
+              sock.send(JSON.stringify({
+                playerId: currentPlayerId,
+                cmd: cmdPrefix,
+                angle: 0,
+                power: 0
+              }));
+            }
+            break;
+          }
+        }
+      }, {passive: false});
+    }
+    
+    document.getElementById('playerSelect').addEventListener('change', (e) => {
+      currentPlayerId = e.target.value;
+      if (connected) {
+        sock.send(JSON.stringify({
+          role: 'mobile',
+          playerId: currentPlayerId
+        }));
+      }
+    });
+    
+    setupJoystick(document.getElementById('moveJoy'), 'move');
+    setupJoystick(document.getElementById('aimJoy'), 'aim');
+    
+    const shootBtn = document.getElementById('shootBtn');
+    shootBtn.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      if (connected && superReady[currentPlayerId]) {
+        superLoading = true;
+        superLoadStart = Date.now();
+        shootBtn.style.background = 'linear-gradient(90deg, #00f 0%, #fff 100%)';
+        superLoadTimeout = setTimeout(() => {
+          // Super bullet ready
+          shootBtn.style.background = 'linear-gradient(90deg, #00f 0%, #0ff 100%)';
+        }, 2000);
+      }
+    }, {passive: false});
+    shootBtn.addEventListener('touchend', (e) => {
+      e.preventDefault();
+      if (connected) {
+        let isSuper = false;
+        if (superLoading && superReady[currentPlayerId] && Date.now() - superLoadStart >= 2000) {
+          isSuper = true;
+          superReady[currentPlayerId] = false;
+          shootBtn.style.background = '#333';
+        } else {
+          shootBtn.style.background = '#ff3333';
+        }
+        sock.send(JSON.stringify({
+          playerId: currentPlayerId,
+          cmd: 'shoot',
+          super: isSuper
+        }));
+      }
+      superLoading = false;
+      clearTimeout(superLoadTimeout);
+    }, {passive: false});
+    
+    // Add dynamite button
+    const dynamiteBtn = document.getElementById('dynamiteBtn');
+    let dynamiteReady = { red: true, blue: true };
+    let dragActive = false;
+    let dragOffset = { x: 0, y: 0 };
+    let dragStart = { x: 0, y: 0 };
+    dynamiteBtn.addEventListener('touchstart', (e) => {
+      if (!dynamiteReady[currentPlayerId]) return;
+      if (e.touches.length > 1) return;
+      dragActive = true;
+      dragStart.x = e.touches[0].clientX;
+      dragStart.y = e.touches[0].clientY;
+      dragOffset.x = 0;
+      dragOffset.y = 0;
+      dynamiteBtn.style.background = '#f80';
+    }, {passive: false});
+    dynamiteBtn.addEventListener('touchmove', (e) => {
+      if (!dragActive) return;
+      const dx = e.touches[0].clientX - dragStart.x;
+      const dy = e.touches[0].clientY - dragStart.y;
+      dragOffset.x = dx;
+      dragOffset.y = dy;
+      dynamiteBtn.style.transform = `translate(${dx}px,${dy}px)`;
+    }, {passive: false});
+    dynamiteBtn.addEventListener('touchend', (e) => {
+      if (!dragActive) return;
+      dragActive = false;
+      dynamiteBtn.style.background = '#ff0';
+      dynamiteBtn.style.transform = '';
+      // If dragged far, treat as drag-place
+      if (Math.abs(dragOffset.x) > 40 || Math.abs(dragOffset.y) > 40) {
+        // Place dynamite at drop position (relative to field)
+        const fieldRect = document.getElementById('game')?.getBoundingClientRect();
+        let x = (dragStart.x + dragOffset.x - (fieldRect?.left || 0)) / (fieldRect?.width || 1);
+        let y = (dragStart.y + dragOffset.y - (fieldRect?.top || 0)) / (fieldRect?.height || 1);
+        x = Math.max(0, Math.min(1, x));
+        y = Math.max(0, Math.min(1, y));
+        if (connected) {
+          sock.send(JSON.stringify({
+            playerId: currentPlayerId,
+            cmd: 'place_dynamite',
+            x, y
+          }));
+          dynamiteReady[currentPlayerId] = false;
+        }
+      } else {
+        // Tap: place at player position
+        if (connected) {
+          sock.send(JSON.stringify({
+            playerId: currentPlayerId,
+            cmd: 'place_dynamite',
+            x: null, y: null
+          }));
+          dynamiteReady[currentPlayerId] = false;
+        }
+      }
+    }, {passive: false});
+    // Reset dynamite on goal (listen for message from server if needed)
+    
+    // Add dynamite toggle
+    const dynamiteToggle = document.getElementById('dynamiteToggle');
+    let dynamiteEnabled = true;
+    dynamiteToggle.onclick = () => {
+      dynamiteEnabled = !dynamiteEnabled;
+      // Update dynamite toggle logic for text
+      dynamiteToggle.textContent = dynamiteEnabled ? 'DYNAMITE ON' : 'DYNAMITE OFF';
+      dynamiteToggle.className = 'toggle-btn' + (dynamiteEnabled ? '' : ' off');
+      dynamiteBtn.style.display = dynamiteEnabled ? '' : 'none';
+    };
+    
+    initWebSocket();
+  </script>
+</body>

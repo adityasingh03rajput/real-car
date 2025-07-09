@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<style>
+  * { margin: 0; padding: 0; user-select: none; }
+  canvas { display: block; background: #222; }
+  body { overflow: hidden; }
+  #status {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    color: white;
+    font-family: Arial;
+    font-size: 16px;
+    background: rgba(0,0,0,0.5);
+    padding: 5px 10px;
+    border-radius: 5px;
+  }
+  #scorePanel {
+    position:fixed;top:10px;left:50%;transform:translateX(-50%);color:white;font-size:32px;font-family:Arial,Helvetica,sans-serif;z-index:1002;text-shadow:2px 2px 8px #000;
+  }
+</style>
+<body>
+  <div id="status">Connecting to server...</div>
+  <div id="scorePanel" style="position:fixed;top:10px;left:50%;transform:translateX(-50%);color:white;font-size:32px;font-family:Arial,Helvetica,sans-serif;z-index:1002;text-shadow:2px 2px 8px #000;">0 : 0</div>
+  <canvas id="game"></canvas>
+  <div id="controlPanel" style="position:fixed;right:10px;top:10px;z-index:1001;background:rgba(0,0,0,0.7);padding:10px;border-radius:8px;display:flex;flex-direction:column;gap:8px;">
+    <select id="playerSelect"><option value="">Spectate</option><option value="red">Red</option><option value="blue">Blue</option></select>
+    <button id="moveUp">↑</button>
+    <div style="display:flex;gap:4px;justify-content:center;"><button id="moveLeft">←</button><button id="moveDown">↓</button><button id="moveRight">→</button></div>
+    <button id="shootBtn">FIRE</button>
+  </div>
+  <script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const statusEl = document.getElementById('status');
+    let sock;
+    let connected = false;
+    
+    function initCanvas() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    initCanvas();
+    
+    let gameState = {
+      players: {
+        red: { x: 150, y: 300, ax: 1, ay: 0, health: 100, freeze: 0, color: '#ff4444' },
+        blue: { x: canvas.width-200, y: 300, ax: -1, ay: 0, health: 100, freeze: 0, color: '#4444ff' }
+      },
+      ball: { x: canvas.width/2, y: canvas.height/2, r: 15, color: '#ffaa00' },
+      bullets: [],
+      score: { red: 0, blue: 0 }
+    };
+
+    const goals = [
+      { x: 0, y: canvas.height/2-100, w: 20, h: 200, color: '#ff4444' },
+      { x: canvas.width-20, y: canvas.height/2-100, w: 20, h: 200, color: '#4444ff' }
+    ];
+
+    function initWebSocket() {
+      statusEl.textContent = "Connecting to server...";
+      
+      try {
+        const protocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+        sock = new WebSocket(protocol + '192.168.102.31:8080');
+        
+        sock.onopen = () => {
+          connected = true;
+          statusEl.textContent = "Connected to server";
+          console.log('Connected to server');
+          sock.send(JSON.stringify({role: 'game'}));
+        };
+        
+        sock.onmessage = handleMessage;
+        
+        sock.onerror = (error) => {
+          connected = false;
+          statusEl.textContent = "Connection error";
+          console.error('WebSocket error:', error);
+        };
+        
+        sock.onclose = () => {
+          connected = false;
+          statusEl.textContent = "Disconnected. Reconnecting...";
+          console.log('Disconnected from server');
+          setTimeout(initWebSocket, 3000);
+        };
+      } catch (error) {
+        connected = false;
+        statusEl.textContent = "Connection failed";
+        console.error('WebSocket initialization failed:', error);
+        setTimeout(initWebSocket, 3000);
+      }
+    }
+
+    function handleMessage(e) {
+      try {
+        const data = JSON.parse(e.data);
+        if (!data || !data.type) return;
+
+        if (data.type === 'init' || data.type === 'update') {
+          if (!data.state) return;
+
+          if (data.state.players) {
+            if (data.state.players.red) {
+              gameState.players.red.x = (data.state.players.red.x || 0) * canvas.width;
+              gameState.players.red.y = (data.state.players.red.y || 0) * canvas.height;
+              gameState.players.red.ax = data.state.players.red.ax || 0;
+              gameState.players.red.ay = data.state.players.red.ay || 0;
+              gameState.players.red.freeze = data.state.players.red.freeze || 0;
+              gameState.players.red.health = data.state.players.red.health || 100;
+            }
+            if (data.state.players.blue) {
+              gameState.players.blue.x = (data.state.players.blue.x || 0) * canvas.width;
+              gameState.players.blue.y = (data.state.players.blue.y || 0) * canvas.height;
+              gameState.players.blue.ax = data.state.players.blue.ax || 0;
+              gameState.players.blue.ay = data.state.players.blue.ay || 0;
+              gameState.players.blue.freeze = data.state.players.blue.freeze || 0;
+              gameState.players.blue.health = data.state.players.blue.health || 100;
+            }
+          }
+
+          if (data.state.ball) {
+            gameState.ball.x = (data.state.ball.x || 0.5) * canvas.width;
+            gameState.ball.y = (data.state.ball.y || 0.5) * canvas.height;
+          }
+
+          if (Array.isArray(data.state.bullets)) {
+            gameState.bullets = data.state.bullets.map(b => ({
+              x: (b.x || 0) * canvas.width,
+              y: (b.y || 0) * canvas.height,
+              owner: b.owner || 'red',
+              color: b.owner === 'red' ? '#ff4444' : '#4444ff'
+            }));
+          }
+
+          if (data.state.score) {
+            gameState.score.red = data.state.score.red;
+            gameState.score.blue = data.state.score.blue;
+            document.getElementById('scorePanel').textContent = `${gameState.score.red} : ${gameState.score.blue}`;
+            // Goal flash
+            goalFlash = 1.0;
+          }
+        }
+      } catch (error) {
+        console.error('Error processing message:', error);
+      }
+    }
+
+    function drawPlayer(x, y, color) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(x, y, 30, 0, Math.PI*2);
+      ctx.fillStyle = color;
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 10;
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // Animation state
+    let playerHitFlash = { red: 0, blue: 0 };
+    let goalFlash = 0;
+    let ballTrail = [];
+    let playerTrail = { red: [], blue: [] };
+
+    function gameLoop() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      // Goal flash
+      if (goalFlash > 0) {
+        ctx.save();
+        ctx.globalAlpha = goalFlash * 0.5;
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0,0,canvas.width,canvas.height);
+        ctx.restore();
+        goalFlash -= 0.03;
+        if (goalFlash < 0) goalFlash = 0;
+      }
+      // Ball trail
+      ballTrail.push({x: gameState.ball.x, y: gameState.ball.y});
+      if (ballTrail.length > 15) ballTrail.shift();
+      for (let i = 0; i < ballTrail.length; ++i) {
+        ctx.save();
+        ctx.globalAlpha = i / ballTrail.length * 0.3;
+        ctx.beginPath();
+        ctx.arc(ballTrail[i].x, ballTrail[i].y, gameState.ball.r, 0, Math.PI*2);
+        ctx.fillStyle = gameState.ball.color;
+        ctx.fill();
+        ctx.restore();
+      }
+      // Player trails
+      for (let id of ['red','blue']) {
+        let p = gameState.players[id];
+        if (!p) continue;
+        playerTrail[id].push({x: p.x, y: p.y});
+        if (playerTrail[id].length > 10) playerTrail[id].shift();
+        for (let i = 0; i < playerTrail[id].length; ++i) {
+          ctx.save();
+          ctx.globalAlpha = i / playerTrail[id].length * 0.2;
+          ctx.beginPath();
+          ctx.arc(playerTrail[id][i].x, playerTrail[id][i].y, 30, 0, Math.PI*2);
+          ctx.fillStyle = p.color;
+          ctx.fill();
+          ctx.restore();
+        }
+      }
+      // Goals
+      goals.forEach(g => {
+        ctx.fillStyle = g.color;
+        ctx.fillRect(g.x, g.y, g.w, g.h);
+      });
+      // Ball
+      ctx.beginPath();
+      ctx.arc(gameState.ball.x, gameState.ball.y, gameState.ball.r, 0, Math.PI*2);
+      ctx.fillStyle = gameState.ball.color;
+      ctx.shadowColor = gameState.ball.color;
+      ctx.shadowBlur = 10;
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      // Players
+      for (let id in gameState.players) {
+        const p = gameState.players[id];
+        if (!p) continue;
+        // Hit flash
+        if (playerHitFlash[id] > 0) {
+          ctx.save();
+          ctx.globalAlpha = playerHitFlash[id];
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, 40, 0, Math.PI*2);
+          ctx.fillStyle = '#fff';
+          ctx.fill();
+          ctx.restore();
+          playerHitFlash[id] -= 0.05;
+          if (playerHitFlash[id] < 0) playerHitFlash[id] = 0;
+        }
+        if (p.freeze > 0) {
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, 40, 0, Math.PI*2);
+          ctx.fill();
+        }
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 30, 0, Math.PI*2);
+        ctx.fillStyle = p.color;
+        ctx.shadowColor = p.color;
+        ctx.shadowBlur = 10;
+        ctx.fill();
+        ctx.restore();
+        ctx.fillStyle = 'white';
+        ctx.font = '16px Arial';
+        ctx.fillText(p.health, p.x - 10, p.y - 40);
+      }
+      // Bullets (fade out as they travel)
+      if (Array.isArray(gameState.bullets)) {
+        gameState.bullets.forEach(b => {
+          let fade = 1.0;
+          if (b.dist !== undefined) fade = Math.max(0, 1 - b.dist/1.5);
+          ctx.save();
+          ctx.globalAlpha = fade;
+          ctx.beginPath();
+          ctx.arc(b.x, b.y, 5, 0, Math.PI*2);
+          ctx.fillStyle = b.color;
+          ctx.fill();
+          ctx.restore();
+        });
+      }
+      requestAnimationFrame(gameLoop);
+    }
+    
+    window.addEventListener('resize', () => {
+      initCanvas();
+      goals[1].x = canvas.width - 20;
+    });
+
+    initWebSocket();
+    gameLoop();
+
+    // Control panel logic
+    const playerSelect = document.getElementById('playerSelect');
+    let controlSock;
+    let controlPlayerId = '';
+    function initControlSocket() {
+      if(controlSock) controlSock.close();
+      if(!playerSelect.value) return;
+      const protocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+      controlSock = new WebSocket(protocol + '192.168.102.31:8080');
+      controlSock.onopen = () => {
+        controlPlayerId = playerSelect.value;
+        controlSock.send(JSON.stringify({role:'mobile',playerId:controlPlayerId}));
+      };
+    }
+    playerSelect.addEventListener('change',()=>{initControlSocket();});
+    function sendMove(angle,power=1) {
+      if(controlSock&&controlSock.readyState===1) controlSock.send(JSON.stringify({playerId:controlPlayerId,cmd:'move',angle,power}));
+    }
+    function sendAim(angle) {
+      if(controlSock&&controlSock.readyState===1) controlSock.send(JSON.stringify({playerId:controlPlayerId,cmd:'aim',angle,power:1}));
+    }
+    function sendShoot() {
+      if(controlSock&&controlSock.readyState===1) controlSock.send(JSON.stringify({playerId:controlPlayerId,cmd:'shoot'}));
+    }
+    document.getElementById('moveUp').onclick=()=>sendMove(270,1);
+    document.getElementById('moveDown').onclick=()=>sendMove(90,1);
+    document.getElementById('moveLeft').onclick=()=>sendMove(180,1);
+    document.getElementById('moveRight').onclick=()=>sendMove(0,1);
+    document.getElementById('shootBtn').onclick=()=>sendShoot();
+
+    // Listen for hits to trigger flash
+    window.addEventListener('message', function(e) {
+      if (e.data && e.data.type === 'hit' && e.data.playerId) {
+        playerHitFlash[e.data.playerId] = 1.0;
+      }
+    });
+  </script>
+</body>
